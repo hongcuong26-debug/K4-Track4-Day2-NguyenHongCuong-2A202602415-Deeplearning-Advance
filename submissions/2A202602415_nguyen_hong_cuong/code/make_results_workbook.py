@@ -1,55 +1,43 @@
-"""Create the required formatted results.xlsx workbook without inventing metrics."""
+"""Build results.xlsx from the committed Colab logs and eval.py outputs."""
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-OUTPUT = Path(__file__).resolve().parent.parent / "results.xlsx"
+ROOT = Path(__file__).resolve().parent.parent
+OUTPUT = ROOT / "results.xlsx"
 HEADERS = {
     "Backbones": ["exp_id", "backbone", "weight_tag", "params_M", "GMAC", "resolution",
-                  "epochs", "seed", "macro_F1_val", "top1_val", "train_s_per_epoch",
-                  "latency_batch1_ms", "notes", "status"],
-    "Training": ["exp_id", "backbone", "axis_A_to_G", "difference_from_T00", "seed",
-                 "macro_F1_val", "top1_val", "delta_vs_T00", "rare_class_F1", "notes", "status"],
-    "Inference": ["exp_id", "method", "model_checkpoint", "K", "macro_F1_val", "top1_val",
-                  "ECE_val", "p50_ms_batch1", "p95_ms_batch1", "p99_ms_batch1",
-                  "images_per_s", "relative_cost_vs_I00", "status"],
+                  "epochs", "seed", "best_epoch", "macro_F1_val", "top1_val",
+                  "train_s_per_epoch", "notes", "status"],
+    "Training": ["exp_id", "backbone", "recipe", "seed", "macro_F1_val", "top1_val",
+                 "delta_vs_T00_seed", "best_epoch", "notes", "status"],
+    "Inference": ["exp_id", "method", "configuration", "seed", "views", "macro_F1_val",
+                  "top1_val", "latency_batch1_ms", "notes", "status"],
     "Final": ["exp_id", "configuration", "seed", "macro_F1_val", "macro_F1_test",
-              "top1_test", "balanced_acc_test", "ECE_test", "mean_plus_minus_std", "status"],
-    "PerClass": ["configuration", "class", "test_support", "precision", "recall", "F1", "status"],
-    "Latency": ["configuration", "GPU", "dtype", "batch", "resolution", "BN_fused",
-                "p50_ms", "p95_ms", "p99_ms", "images_per_s", "warmup", "iterations", "status"],
-    "Summary": ["rank", "exp_id", "configuration", "macro_F1_val", "top1_val", "params_M",
-                "p95_ms_batch1", "relative_cost", "evidence_note", "status"],
+              "top1_test", "balanced_acc_test", "ECE_test", "NLL_test", "status"],
+    "PerClass": ["configuration", "class", "test_support", "precision_mean", "precision_std",
+                 "recall_mean", "recall_std", "F1_mean", "F1_std", "status"],
+    "Latency": ["configuration", "GPU", "dtype", "batch", "resolution", "mean_train_epoch_s",
+                "p50_inference_ms", "p95_inference_ms", "p99_inference_ms", "notes", "status"],
+    "Summary": ["rank", "exp_id", "configuration", "macro_F1_val_mean", "macro_F1_test_mean",
+                "macro_F1_test_std", "top1_test_mean", "balanced_acc_test_mean", "ECE_test_mean",
+                "params_M", "GMAC", "evidence_note", "status"],
 }
 
-BACKBONES = [
-    ("B01", "resnet50"), ("B02", "resnext50_32x4d"), ("B03", "convnext_tiny"),
-    ("B04", "deit_small_patch16_224"), ("B05", "swin_tiny_patch4_window7_224"),
-    ("B06", "efficientnet_b0"),
-]
-TRAINING = [
-    ("T00", "baseline", "baseline recipe"),
-    ("T01", "A", "init=scratch"), ("T02", "A", "init=frozen"),
-    ("T03", "B", "aug=color"), ("T04", "B", "aug=randaug"),
-    ("T05", "C", "loss=label_smoothing(0.1)"), ("T06", "C", "loss=focal(gamma=2)"),
-    ("T07", "C", "loss=class_weighted(beta=0.9999)"),
-    ("T08", "B", "mixup(alpha=0.4)"), ("T09", "B", "cutmix(alpha=1.0)"),
-    ("T10", "G", "EMA(decay=0.999)"),
-]
-INFERENCE = [
-    ("I00", "one view", 1), ("I01", "horizontal flip TTA", 2),
-    ("I02", "five crop TTA", 5), ("I03", "logit/probability aggregation", 2),
-    ("I04", "temperature scaling fitted on val", 1), ("I05", "probability ensemble", 2),
-    ("I06", "Conv-BN fusion or FP16", 1),
-]
+
+def read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
-def format_sheet(ws):
+def format_sheet(ws) -> None:
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     ws.row_dimensions[1].height = 30
@@ -64,38 +52,89 @@ def format_sheet(ws):
                 cell.number_format = "0.0000"
     for index, column in enumerate(ws.columns, 1):
         content = [str(cell.value or "") for cell in column]
-        width = min(max(max(map(len, content)) + 2, 11), 34)
-        ws.column_dimensions[get_column_letter(index)].width = width
-    metric_columns = [cell.column for cell in ws[1] if "F1" in str(cell.value) or "top1" in str(cell.value)]
-    for column in metric_columns:
-        letter = get_column_letter(column)
-        ws.conditional_formatting.add(f"{letter}2:{letter}500",
-            ColorScaleRule(start_type="min", start_color="FEE2E2", mid_type="percentile",
-                           mid_value=50, mid_color="FEF3C7", end_type="max", end_color="DCFCE7"))
+        ws.column_dimensions[get_column_letter(index)].width = min(max(max(map(len, content)) + 2, 11), 38)
+    for cell in ws[1]:
+        if any(key in str(cell.value) for key in ("F1", "top1", "acc")):
+            letter = get_column_letter(cell.column)
+            ws.conditional_formatting.add(
+                f"{letter}2:{letter}{ws.max_row}",
+                ColorScaleRule(start_type="min", start_color="FEE2E2", mid_type="percentile",
+                               mid_value=50, mid_color="FEF3C7", end_type="max", end_color="DCFCE7"),
+            )
 
 
-def main():
+def main() -> None:
+    summaries = json.loads((ROOT / "final_summaries.json").read_text(encoding="utf-8"))
+    by_key = {(row["exp_id"], int(row["seed"])): row for row in summaries}
+    test_rows = {
+        exp: {int(row["seed"]): row for row in read_csv(ROOT / "eval_out" / f"{exp}_per_seed.csv")}
+        for exp in ("T00", "F01")
+    }
+    aggregate = {
+        exp: json.loads((ROOT / "eval_out" / f"{exp}_summary.json").read_text(encoding="utf-8"))
+        for exp in ("T00", "F01")
+    }
+    configs = {
+        "T00": ("resnet50", "ImageNet pretrained; basic augmentation; CE; no mixing; no EMA", 64),
+        "F01": ("convnext_tiny", "ImageNet pretrained; RandAugment; weighted CE; CutMix; EMA", 48),
+    }
+
     workbook = Workbook()
     workbook.remove(workbook.active)
     sheets = {name: workbook.create_sheet(name) for name in HEADERS}
     for name, headers in HEADERS.items():
         sheets[name].append(headers)
 
-    for exp_id, backbone in BACKBONES:
-        sheets["Backbones"].append([exp_id, backbone, "", "", "", 224, 12, 0,
-                                    "", "", "", "", "Awaiting real GPU log", "PLANNED"])
-    for exp_id, axis, difference in TRAINING:
-        sheets["Training"].append([exp_id, "select from validation", axis, difference, 0,
-                                   "", "", "", "", "One-factor comparison", "PLANNED"])
-    for exp_id, method, views in INFERENCE:
-        sheets["Inference"].append([exp_id, method, "best validation checkpoint", views,
-                                    "", "", "", "", "", "", "", "", "PLANNED"])
+    for exp in ("T00", "F01"):
+        backbone, recipe, batch = configs[exp]
+        for seed in (0, 1, 2):
+            run = by_key[(exp, seed)]
+            test = test_rows[exp][seed]
+            sheets["Backbones"].append([
+                exp, backbone, "ImageNet-1K", run["params_m"], run["gmacs_conv_linear"], 224,
+                10, seed, run["best_epoch"], run["val_macro_f1"], run["val_top1"],
+                run["mean_epoch_seconds"], "Full fold-0 Colab T4 run", "MEASURED",
+            ])
+            baseline = by_key[("T00", seed)]["val_macro_f1"]
+            sheets["Training"].append([
+                exp, backbone, recipe, seed, run["val_macro_f1"], run["val_top1"],
+                run["val_macro_f1"] - baseline, run["best_epoch"], "Locked from validation", "MEASURED",
+            ])
+            sheets["Inference"].append([
+                "I00", "one view FP32", exp, seed, 1, run["val_macro_f1"], run["val_top1"], "",
+                "Accuracy measured; batch-1 latency was not benchmarked", "MEASURED_ACCURACY",
+            ])
+            sheets["Final"].append([
+                exp, f"{backbone} + I00", seed, run["val_macro_f1"], float(test["macro_f1"]),
+                float(test["top1"]), float(test["balanced_acc"]), float(test["ece"]), float(test["nll"]),
+                "MEASURED",
+            ])
+        sheets["Latency"].append([
+            exp, "NVIDIA T4", "AMP training / FP32 export", batch, 224,
+            sum(by_key[(exp, seed)]["mean_epoch_seconds"] for seed in (0, 1, 2)) / 3,
+            "", "", "", "Training time measured; inference latency not measured", "PARTIAL",
+        ])
 
-    summary = sheets["Summary"]
-    summary.append(["", "", "No experiment metrics are populated until real GPU runs finish.",
-                    "", "", "", "", "", "Select only from validation; test once per final seed.", "PENDING"])
-    summary.append(["", "EDA", "Fold 0 split verification", "", "", "", "", "",
-                    "train=10501, val=3501, test=3507; disjoint; union=17509", "VERIFIED"])
+    for exp in ("T00", "F01"):
+        for row in read_csv(ROOT / "eval_out" / f"{exp}_per_class.csv"):
+            sheets["PerClass"].append([
+                exp, row["class"], int(row["support"]), float(row["precision_mean"]),
+                float(row["precision_std"]), float(row["recall_mean"]), float(row["recall_std"]),
+                float(row["f1_mean"]), float(row["f1_std"]), "MEASURED_3_SEEDS",
+            ])
+
+    ranking = sorted(("T00", "F01"), key=lambda exp: aggregate[exp]["macro_f1"]["mean"], reverse=True)
+    for rank, exp in enumerate(ranking, 1):
+        backbone, recipe, _ = configs[exp]
+        agg = aggregate[exp]
+        val_mean = sum(by_key[(exp, seed)]["val_macro_f1"] for seed in (0, 1, 2)) / 3
+        run0 = by_key[(exp, 0)]
+        sheets["Summary"].append([
+            rank, exp, f"{backbone}: {recipe}", val_mean, agg["macro_f1"]["mean"],
+            agg["macro_f1"]["std"], agg["top1"]["mean"], agg["balanced_acc"]["mean"],
+            agg["ece"]["mean"], run0["params_m"], run0["gmacs_conv_linear"],
+            "eval.py over three independent seeds", "MEASURED",
+        ])
 
     for sheet in sheets.values():
         format_sheet(sheet)
@@ -103,6 +142,9 @@ def main():
     workbook.calculation.forceFullCalc = True
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(OUTPUT)
+    checked = load_workbook(OUTPUT, read_only=True, data_only=False)
+    assert checked.sheetnames == list(HEADERS)
+    checked.close()
     print(OUTPUT)
 
 

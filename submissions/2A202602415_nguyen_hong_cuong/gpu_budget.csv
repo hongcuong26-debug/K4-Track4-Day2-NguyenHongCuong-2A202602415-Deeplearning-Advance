@@ -1,8 +1,7 @@
-screen_exp_id,budget_exp_id,backbone,seed,one_epoch_seconds,planned_epochs_per_train,estimated_one_train_seconds,planned_train_runs,estimated_total_seconds,estimated_total_hours
-B01,G01_B01,resnet50,0,,12,,,,
-B02,G02_B02,resnext50,0,,12,,,,
-B03,G03_B03,convnext_tiny,0,,12,,,,
-B04,G04_B04,deit_small,0,,12,,,,
-B05,G05_B05,swin_tiny,0,,12,,,,
-B06,G06_B06,efficientnet_b0,0,,12,,,,
-TOTAL,,uses slowest measured backbone as conservative estimate,0,,12,,26,,
+exp_id,backbone,seed,mean_epoch_seconds,epochs,measured_train_seconds,device,status
+T00,resnet50,0,44.9288607570,10,449.2886075700,NVIDIA T4,MEASURED
+T00,resnet50,1,45.6514626806,10,456.5146268060,NVIDIA T4,MEASURED
+T00,resnet50,2,46.0282689601,10,460.2826896010,NVIDIA T4,MEASURED
+F01,convnext_tiny,0,57.9918429724,10,579.9184297240,NVIDIA T4,MEASURED
+F01,convnext_tiny,1,57.7114154760,10,577.1141547600,NVIDIA T4,MEASURED
+F01,convnext_tiny,2,58.1627025658,10,581.6270256580,NVIDIA T4,MEASURED

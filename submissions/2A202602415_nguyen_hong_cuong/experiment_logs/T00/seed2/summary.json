@@ -1,0 +1,9 @@
+{
+  "best_epoch": 9,
+  "val_macro_f1": 0.7937857616510409,
+  "val_top1": 0.8500428449014568,
+  "params_m": 23.526473,
+  "gmacs_conv_linear": 4.087154688,
+  "mean_epoch_seconds": 46.028268960100014,
+  "test_macro_f1": 0.7938730820193965
+}
